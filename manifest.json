@@ -1,14 +1,23 @@
 {
-  "name": "ApkMorph - Smart Visual APK & Web Wrapper Customizer",
+  "name": "ApkMorph - معاينة وتعديل ملفات APK",
   "short_name": "ApkMorph",
-  "description": "Web-based visual editor, preview tool, and wrapper customizer for Web2APK and PWA projects.",
+  "description": "افتح وعلّق على ملفات APK و ZIP داخل محاكي موبايل تفاعلي — أداة PWA لفتح وتخصيص ملفات التطبيقات.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "orientation": "any",
+  "orientation": "portrait",
   "background_color": "#09090b",
   "theme_color": "#09090b",
   "categories": ["developer", "productivity", "utilities"],
+  "file_handlers": [
+    {
+      "action": "./index.html",
+      "accept": {
+        "application/vnd.android.package-archive": [".apk"],
+        "application/zip": [".zip"]
+      }
+    }
+  ],
   "icons": [
     {
       "src": "./icons/icon.svg",
