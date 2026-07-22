@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#09090b" />
+  <meta name="description" content="ApkMorph - Smart Visual APK & Web Wrapper Customizer. A web-based visual editor, preview tool, and wrapper customizer for Web2APK and PWA projects." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ApkMorph" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
+  <link rel="apple-touch-icon" href="./icons/icon-512.png" />
+  <link rel="stylesheet" href="./styles.css" />
+  <title>ApkMorph — Smart Visual APK & Web Wrapper Customizer</title>
+</head>
+<body>
+  <!-- Ambient glow backdrop -->
+  <div class="aurora" aria-hidden="true"></div>
+
+  <!-- ============ HEADER ============ -->
+  <header class="app-header reveal">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 512 512" width="34" height="34">
+          <defs>
+            <linearGradient id="hg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#6366f1"/>
+              <stop offset="1" stop-color="#a855f7"/>
+            </linearGradient>
+          </defs>
+          <g fill="none" stroke="url(#hg)" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M150 362 L256 150 L362 362"/>
+            <path d="M198 292 L314 292"/>
+          </g>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1 class="logo-text">ApkMorph</h1>
+        <p class="subtitle">Smart Visual APK &amp; Web Wrapper Customizer</p>
+      </div>
+    </div>
+    <div class="status-badge" id="pwaStatus" title="PWA Engine">
+      <span class="status-light"></span>
+      <span class="status-label">PWA Engine Ready</span>
+    </div>
+  </header>
+
+  <!-- ============ MAIN GRID ============ -->
+  <main class="app-grid">
+
+    <!-- LEFT COLUMN: Input Hub + Inspector -->
+    <section class="col-left">
+
+      <!-- Input & Load Hub -->
+      <div class="panel reveal" id="inputHub">
+        <div class="panel-head">
+          <h2 class="panel-title"><span class="dot"></span> Input &amp; Load Hub</h2>
+        </div>
+
+        <div class="tabs" role="tablist">
+          <button class="tab-btn active" data-tab="url" role="tab">URL Input</button>
+          <button class="tab-btn" data-tab="file" role="tab">Local File</button>
+        </div>
+
+        <div class="tab-panel active" id="tab-url">
+          <label class="field-label" for="urlInput">Direct APK link · GitHub Pages · Web App URL</label>
+          <input id="urlInput" class="text-input" type="url" placeholder="https://yoursite.pages.dev  or  https://.../app.apk" autocomplete="off" />
+          <p class="hint">Paste any embeddable web URL. Cross-origin pages preview in read-only mode.</p>
+        </div>
+
+        <div class="tab-panel" id="tab-file">
+          <div class="dropzone" id="dropZone" tabindex="0">
+            <div class="dz-icon" aria-hidden="true">⬆</div>
+            <p class="dz-main">Drag &amp; drop your project here</p>
+            <p class="dz-sub">Supports <b>.apk</b> and <b>.zip</b> files</p>
+            <input id="fileInput" type="file" accept=".apk,.zip,application/zip,application/vnd.android.package-archive" hidden />
+            <button class="btn-ghost sm" id="browseBtn" type="button">Browse Files</button>
+          </div>
+          <div class="file-info" id="fileInfo" hidden></div>
+        </div>
+
+        <button class="btn-primary block" id="loadBtn" type="button">
+          <span class="btn-spinner" aria-hidden="true"></span>
+          <span class="btn-label">Load &amp; Sanitize Project</span>
+        </button>
+      </div>
+
+      <!-- Inspector & Customization -->
+      <div class="panel reveal" id="inspector">
+        <div class="panel-head">
+          <h2 class="panel-title"><span class="dot"></span> Inspector &amp; Customization</h2>
+        </div>
+
+        <!-- Watermark removal -->
+        <div class="row-between">
+          <div>
+            <div class="row-title">Watermark &amp; Branding Removal</div>
+            <div class="row-sub">Strip Appmint / Lovable &amp; injected overlays</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="watermarkToggle" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <!-- Splash customizer -->
+        <div class="sub-group">
+          <div class="group-label">Splash Screen</div>
+          <div class="row-between">
+            <label class="field-label" for="splashDuration">Duration</label>
+            <div class="inline-num">
+              <input id="splashDuration" class="num-input" type="number" min="0" max="10" step="0.5" value="2.5" />
+              <span class="unit">sec</span>
+            </div>
+          </div>
+          <div class="row-between">
+            <label class="field-label" for="splashLogoInput">Logo</label>
+            <label class="btn-ghost sm file-btn">
+              Upload
+              <input id="splashLogoInput" type="file" accept="image/*" hidden />
+            </label>
+          </div>
+          <div class="row-between">
+            <label class="field-label" for="splashBg">Background</label>
+            <input id="splashBg" class="color-input" type="color" value="#09090b" />
+          </div>
+          <button class="btn-ghost sm block" id="previewSplashBtn" type="button">Preview Splash</button>
+        </div>
+
+        <!-- Metadata -->
+        <div class="sub-group">
+          <div class="group-label">App Metadata</div>
+          <label class="field-label" for="appName">App Name</label>
+          <input id="appName" class="text-input" type="text" value="ApkMorph Demo" />
+          <label class="field-label" for="packageId">Package ID</label>
+          <input id="packageId" class="text-input" type="text" value="com.youssef.app" />
+          <label class="field-label" for="appVersion">App Version</label>
+          <input id="appVersion" class="text-input" type="text" value="1.0.0" />
+          <div class="row-between">
+            <label class="field-label" for="iconInput">Launcher Icon</label>
+            <label class="btn-ghost sm file-btn">
+              Upload
+              <input id="iconInput" type="file" accept="image/*" hidden />
+            </label>
+          </div>
+          <div class="icon-preview-wrap">
+            <div class="icon-preview" id="iconPreview" aria-label="Launcher icon preview"></div>
+            <span class="icon-preview-note">Live launcher preview</span>
+          </div>
+        </div>
+
+        <!-- Offline cache -->
+        <div class="row-between">
+          <div>
+            <div class="row-title">Offline Cache Engine</div>
+            <div class="row-sub">Generate Service Worker for 100% offline</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="offlineToggle" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- CENTER: Device Canvas -->
+    <section class="col-center reveal" id="canvasSection">
+      <div class="canvas-toolbar">
+        <span class="canvas-title">Live Device Canvas</span>
+        <label class="inspect-toggle">
+          <input type="checkbox" id="inspectToggle" />
+          <span class="inspect-pill">🔍 Inspect Elements</span>
+        </label>
+      </div>
+
+      <div class="phone-stage">
+        <div class="phone" id="phone">
+          <div class="notch"></div>
+          <div class="statusbar">
+            <span class="sb-time" id="sbTime">9:41</span>
+            <span class="sb-right">
+              <span class="sb-signal" title="signal">▮▮▮▮</span>
+              <span class="sb-wifi" title="wifi">📶</span>
+              <span class="sb-battery" title="battery">🔋</span>
+            </span>
+          </div>
+          <div class="screen" id="screen">
+            <iframe id="deviceIframe" title="Live preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            <div class="inspect-overlay" id="inspectOverlay" aria-hidden="true"></div>
+            <div class="inspect-box" id="inspectBox" hidden></div>
+            <div class="inspect-tip" id="inspectTip" hidden>Click an element to inspect / hide it</div>
+          </div>
+          <div class="splash" id="splashOverlay" hidden>
+            <img id="splashLogo" class="splash-logo" alt="" hidden />
+            <div class="splash-name" id="splashName">ApkMorph Demo</div>
+          </div>
+        </div>
+        <div class="inspect-readout" id="inspectReadout" hidden>
+          <div class="ir-head">
+            <span>Element Inspector</span>
+            <button class="ir-close" id="irClose" type="button">✕</button>
+          </div>
+          <pre class="ir-code" id="irCode"></pre>
+          <div class="ir-actions">
+            <button class="btn-ghost sm" id="irHide" type="button">Hide Element</button>
+            <button class="btn-ghost sm" id="irShow" type="button">Restore</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: Build Terminal -->
+    <section class="col-right reveal" id="consoleSection">
+      <div class="panel console-panel">
+        <div class="panel-head clickable" id="consoleToggle">
+          <h2 class="panel-title"><span class="dot"></span> Build Terminal</h2>
+          <span class="chevron" id="consoleChevron">▾</span>
+        </div>
+        <div class="console-body" id="consoleBody">
+          <div class="console-output" id="console"></div>
+        </div>
+
+        <div class="progress-wrap" id="progressWrap" hidden>
+          <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+          <div class="progress-label" id="progressLabel">0%</div>
+        </div>
+
+        <div class="action-toolbar">
+          <button class="btn-primary" id="generateBtn" type="button">
+            <span class="btn-spinner" aria-hidden="true"></span>
+            <span class="btn-label">Generate Clean APK</span>
+          </button>
+          <button class="btn-secondary" id="exportBtn" type="button">
+            <span class="btn-spinner" aria-hidden="true"></span>
+            <span class="btn-label">Export Offline ZIP</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="app-footer">
+    تم إنشاء هذا التطبيق بواسطة Youssef Mahmoud
+  </footer>
+
+  <!-- Toast container -->
+  <div class="toast-stack" id="toasts" aria-live="polite"></div>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>
