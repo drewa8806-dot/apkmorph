@@ -1,11 +1,13 @@
 /* ============================================================
-   ApkMorph — Simplified App Logic
-   - Pick APK/ZIP -> parse (real icon + manifest) -> live canvas
+   ApkMorph — App Logic (JSZip-powered archive reading)
+   - Pick APK/ZIP/web -> read with JSZip -> extract index.html / assets as Blobs
+   - Web projects render live inside the iframe; others show extracted assets
    - Inspect elements -> floating options menu (Hide / Edit / Cancel)
    - PWA file_handlers + launchQueue (open .apk/.zip from file manager)
    ============================================================ */
 (() => {
   "use strict";
+  console.log("[ApkMorph] app.js loaded");
 
   const $ = (s, r = document) => r.querySelector(s);
 
@@ -42,15 +44,11 @@
     toasts: $("#toasts"),
   };
 
-  const state = {
-    current: null,
-    selectedEl: null,
-    editEl: null,
-  };
+  const state = { current: null, selectedEl: null, editEl: null };
 
   /* ---------------- helpers ---------------- */
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  function showStatus(msg) { els.status.textContent = msg; }
+  function showStatus(msg) { if (els.status) els.status.textContent = msg; }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
   }
@@ -60,7 +58,12 @@
     return b + " B";
   }
   function blobToDataUrl(blob) {
-    return new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = rej;
+      r.readAsDataURL(blob);
+    });
   }
   function rgbToHex(c) {
     const m = c.match(/\d+/g);
@@ -74,68 +77,23 @@
     t.innerHTML = `<span>${icon}</span><span></span>`;
     t.querySelector("span:last-child").textContent = msg;
     els.toasts.appendChild(t);
-    setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, 2600);
-  }
-
-  /* ---------------- file input / drag-drop ---------------- */
-  els.pickBtn.addEventListener("click", () => els.fileInput.click());
-  els.dropZone.addEventListener("click", () => els.fileInput.click());
-  els.fileInput.addEventListener("change", (e) => {
-    const f = e.target.files[0];
-    if (f) handleFile(f);
-    e.target.value = ""; // allow re-selecting the same file
-  });
-
-  ["dragenter", "dragover"].forEach((ev) =>
-    els.dropZone.addEventListener(ev, (e) => { e.preventDefault(); els.dropZone.classList.add("dragover"); })
-  );
-  ["dragleave", "drop"].forEach((ev) =>
-    els.dropZone.addEventListener(ev, (e) => { e.preventDefault(); els.dropZone.classList.remove("dragover"); })
-  );
-  els.dropZone.addEventListener("drop", (e) => {
-    const f = e.dataTransfer.files[0];
-    if (f) handleFile(f);
-  });
-
-  /* ---------------- URL preview ---------------- */
-  els.urlToggle.addEventListener("click", () => {
-    els.urlRow.hidden = !els.urlRow.hidden;
-    els.urlToggle.textContent = els.urlRow.hidden ? "أو أدخل رابط ويب ▾" : "إخفاء رابط الويب ▴";
-  });
-  els.urlBtn.addEventListener("click", () => {
-    const url = els.urlInput.value.trim();
-    if (!url) return;
-    loadUrl(url);
-  });
-
-  /* ---------------- handle a file ---------------- */
-  async function handleFile(file) {
-    if (!file) return;
-    const lower = file.name.toLowerCase();
-    els.fileChip.hidden = false;
-    els.fileChip.textContent = `📄 ${file.name} · ${fmtSize(file.size)}`;
-    els.openTab.hidden = true;
-
-    if (!lower.endsWith(".apk") && !lower.endsWith(".zip")) {
-      toast("الرجاء اختيار ملف APK أو ZIP", "error");
-      showStatus("نوع ملف غير مدعوم");
-      return;
-    }
-    showStatus("جارٍ معالجة " + file.name + " …");
-    try {
-      const info = await parseApk(file);
-      renderApkPreview(info);
-      toast("تم فتح " + file.name, "success");
-    } catch (e) {
-      console.error(e);
-      toast("تعذّر قراءة الملف: " + (e && e.message ? e.message : e), "error");
-      showStatus("فشل في قراءة الملف — جرّب ملف APK/ZIP آخر");
-    }
+    setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, 2800);
   }
 
   /* ============================================================
-     APK / ZIP parsing
+     Archive reading (JSZip primary, built-in fallback)
      ============================================================ */
+  async function loadZip(file) {
+    const buf = await file.arrayBuffer();
+    if (typeof JSZip !== "undefined") {
+      console.log("[ApkMorph] Reading archive with JSZip:", file.name, "size", buf.byteLength);
+      return await JSZip.loadAsync(buf);
+    }
+    console.warn("[ApkMorph] JSZip not available — using built-in fallback parser");
+    return await manualZip(buf);
+  }
+
+  // ---- Built-in fallback (used only if the CDN failed to load) ----
   function parseZip(buf) {
     const dv = new DataView(buf);
     let eocd = -1;
@@ -161,7 +119,6 @@
     }
     return entries;
   }
-
   function readEntryData(buf, entry) {
     const dv = new DataView(buf);
     let p = entry.localOffset;
@@ -171,7 +128,6 @@
     p += 30 + nameLen + extraLen;
     return new Uint8Array(buf, p, entry.compSize);
   }
-
   async function inflate(data) {
     if (typeof DecompressionStream === "undefined") throw new Error("المتصفح لا يدعم فك الضغط");
     const ds = new DecompressionStream("deflate-raw");
@@ -181,70 +137,62 @@
     const ab = await new Response(ds.readable).arrayBuffer();
     return new Uint8Array(ab);
   }
-
-  function pickIcon(entries) {
-    const rank = (n) => {
-      let r = 0;
-      if (/xxxhdpi/.test(n)) r += 5; else if (/xxhdpi/.test(n)) r += 4;
-      else if (/xhdpi/.test(n)) r += 3; else if (/hdpi/.test(n)) r += 2; else if (/mdpi/.test(n)) r += 1;
-      return r;
+  async function manualZip(buf) {
+    const entries = parseZip(buf);
+    const cache = {};
+    const api = { files: {} };
+    api.file = (name) => {
+      const e = entries.find((en) => en.name === name) ||
+                entries.find((en) => en.name === name.replace(/^\.\//, "")) ||
+                entries.find((en) => en.name === name.replace(/^\//, ""));
+      if (!e) return null;
+      return {
+        async (type) {
+          if (cache[e.name] && cache[e.name][type]) return cache[e.name][type];
+          const raw = readEntryData(buf, e);
+          const bytes = e.method === 8 ? await inflate(raw) : raw;
+          const res = { string: new TextDecoder().decode(bytes), blob: new Blob([bytes]), uint8array: bytes };
+          cache[e.name] = res;
+          return res[type] || bytes;
+        },
+      };
     };
-    const cands = entries.filter(
-      (e) => /\.(png|webp)$/i.test(e.name) &&
-             /(mipmap|drawable)/i.test(e.name) &&
-             /(ic_launcher|icon|app_icon|ic_launcher_foreground|logo)/i.test(e.name)
-    );
-    const pool = cands.length
-      ? cands
-      : entries.filter((e) => /\.png$/i.test(e.name) && /(mipmap|drawable)/i.test(e.name));
-    if (!pool.length) return null;
-    pool.sort((a, b) => rank(b.name) - rank(a.name));
-    return pool[0];
+    for (const e of entries) api.files[e.name] = { name: e.name, dir: false };
+    return api;
   }
 
-  async function parseApk(file) {
-    const buf = await file.arrayBuffer();
-    const entries = parseZip(buf);
-
-    let iconDataUrl = null;
-    const iconEntry = pickIcon(entries);
-    if (iconEntry) {
+  // ---- zip object helpers (work for JSZip and the fallback) ----
+  function getAllFiles(zip) {
+    if (zip.files) return Object.keys(zip.files).filter((n) => !zip.files[n].dir);
+    return [];
+  }
+  async function readFile(zip, name, type) {
+    const f = zip.file(name);
+    if (!f) return null;
+    return f.async(type);
+  }
+  function findIndexHtml(zip) {
+    const names = getAllFiles(zip);
+    let root = names.find((n) => /^index\.html?$/i.test(n));
+    if (root) return root;
+    return names.find((n) => /(^|\/)index\.html?$/i.test(n)) || null;
+  }
+  async function extractImages(zip) {
+    const names = getAllFiles(zip).filter((n) => /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(n));
+    const out = [];
+    for (const n of names.slice(0, 30)) {
       try {
-        const raw = await readEntryData(buf, iconEntry);
-        const png = iconEntry.method === 8 ? await inflate(raw) : raw;
-        iconDataUrl = await blobToDataUrl(new Blob([png], { type: "image/png" }));
-      } catch (_) {
-        iconDataUrl = null; // icon failed, continue without it
-      }
+        const blob = await readFile(zip, n, "blob");
+        if (blob && blob.size) out.push({ name: n, url: URL.createObjectURL(blob) });
+      } catch (e) { console.warn("[ApkMorph] image extract failed:", n, e); }
     }
-
-    let meta = {};
-    const man = entries.find((e) => e.name.toLowerCase() === "androidmanifest.xml");
-    if (man) {
-      try {
-        const raw = await readEntryData(buf, man);
-        const xml = man.method === 8 ? await inflate(raw) : raw;
-        meta = parseAxml(xml.buffer || xml);
-      } catch (_) {
-        meta = {};
-      }
-    }
-
-    const baseName = file.name.replace(/\.(apk|zip)$/i, "");
-    return {
-      fileName: file.name,
-      size: file.size,
-      iconDataUrl,
-      package: meta.package || "com.youssef.app",
-      versionName: meta.versionName || "1.0.0",
-      versionCode: meta.versionCode || "",
-      label: meta.label || baseName,
-      entries: entries.length,
-    };
+    console.log("[ApkMorph] extracted", out.length, "images");
+    return out;
   }
 
   /* ---- Minimal AndroidManifest.xml (binary AXML) parser ---- */
-  function parseAxml(buf) {
+  function parseAxml(input) {
+    const buf = input instanceof Uint8Array ? input.buffer : input;
     const dv = new DataView(buf);
     if (dv.getUint32(0, true) !== 0x00080003) throw new Error("ليس AXML");
     let p = 8;
@@ -259,8 +207,7 @@
     const strDataStart = p + stringsStart;
     const strings = offsets.map((o) => readString(buf, strDataStart + o, isUtf8, dv));
 
-    const manifestAttrs = {};
-    const appAttrs = {};
+    const manifestAttrs = {}, appAttrs = {};
     let cp = p + spSize;
     while (cp + 8 <= buf.byteLength) {
       const type = dv.getUint16(cp, true);
@@ -295,7 +242,6 @@
       icon: appAttrs["icon"] || "",
     };
   }
-
   function readString(buf, off, isUtf8, dv) {
     try {
       if (isUtf8) {
@@ -316,21 +262,182 @@
   }
 
   /* ============================================================
-     Rendering the live canvas
+     File handling
      ============================================================ */
-  function renderApkPreview(info) {
+  els.pickBtn.addEventListener("click", () => els.fileInput.click());
+  els.dropZone.addEventListener("click", () => els.fileInput.click());
+  els.fileInput.addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (f) handleFile(f);
+    e.target.value = "";
+  });
+  ["dragenter", "dragover"].forEach((ev) =>
+    els.dropZone.addEventListener(ev, (e) => { e.preventDefault(); els.dropZone.classList.add("dragover"); })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    els.dropZone.addEventListener(ev, (e) => { e.preventDefault(); els.dropZone.classList.remove("dragover"); })
+  );
+  els.dropZone.addEventListener("drop", (e) => {
+    const f = e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+
+  els.urlToggle.addEventListener("click", () => {
+    els.urlRow.hidden = !els.urlRow.hidden;
+    els.urlToggle.textContent = els.urlRow.hidden ? "أو أدخل رابط ويب ▾" : "إخفاء رابط الويب ▴";
+  });
+  els.urlBtn.addEventListener("click", () => {
+    const url = els.urlInput.value.trim();
+    if (!url) return;
+    loadUrl(url);
+  });
+
+  async function handleFile(file) {
+    if (!file) return;
+    console.log("[ApkMorph] handleFile:", file.name, file.type, file.size);
+    const lower = file.name.toLowerCase();
+    els.fileChip.hidden = false;
+    els.fileChip.textContent = `📄 ${file.name} · ${fmtSize(file.size)}`;
+    els.openTab.hidden = true;
+
+    if (!lower.endsWith(".apk") && !lower.endsWith(".zip")) {
+      toast("الرجاء اختيار ملف APK أو ZIP", "error");
+      showStatus("نوع ملف غير مدعوم");
+      return;
+    }
+    showStatus("جارٍ قراءة الأرشيف …");
+    try {
+      const zip = await loadZip(file);
+      const idx = findIndexHtml(zip);
+      if (idx) {
+        console.log("[ApkMorph] Web project detected at", idx);
+        await renderWebProject(zip, idx, file);
+        toast("تم عرض المشروع داخل المحاكي", "success");
+        return;
+      }
+      console.log("[ApkMorph] No index.html — extracting assets / APK info");
+      const images = await extractImages(zip);
+      let meta = {};
+      const manName = getAllFiles(zip).find((n) => /androidmanifest\.xml$/i.test(n));
+      if (manName) {
+        try {
+          const bytes = await readFile(zip, manName, "uint8array");
+          meta = parseAxml(bytes);
+          console.log("[ApkMorph] manifest:", meta);
+        } catch (e) { console.warn("[ApkMorph] manifest parse failed", e); }
+      }
+      renderAssetPreview({ file, images, meta });
+      toast("تم استخراج الأصول من " + file.name, "success");
+    } catch (e) {
+      console.error("[ApkMorph] handleFile error:", e);
+      toast("تعذّر قراءة الملف: " + (e && e.message ? e.message : e), "error");
+      showStatus("فشل في قراءة الملف — جرّب ملف APK/ZIP آخر");
+    }
+  }
+
+  /* ============================================================
+     Render: web project (index.html) inside iframe
+     ============================================================ */
+  async function renderWebProject(zip, idxPath, file) {
+    console.log("[ApkMorph] renderWebProject:", idxPath);
+    const html = await readFile(zip, idxPath, "string");
+    const baseDir = idxPath.includes("/") ? idxPath.replace(/\/[^/]*$/, "") : "";
+    const blobMap = await buildBlobMap(zip);
+    const rewritten = rewriteRefs(html, blobMap, baseDir);
+
+    els.emptyState.hidden = true;
+    els.openTab.hidden = true;
+    els.preview.hidden = true;
+    els.preview.innerHTML = "";
+    els.webFrame.removeAttribute("srcdoc");
+    els.webFrame.removeAttribute("src");
+    els.webFrame.srcdoc = rewritten;
+    els.webFrame.hidden = false;
+    showStatus("تم عرض " + file.name + " داخل المحاكي");
+    console.log("[ApkMorph] iframe populated via srcdoc");
+  }
+
+  async function buildBlobMap(zip) {
+    const names = getAllFiles(zip);
+    const map = {};
+    for (const n of names) {
+      try {
+        const blob = await readFile(zip, n, "blob");
+        if (!blob || !blob.size) continue;
+        const url = URL.createObjectURL(blob);
+        map[n] = url;
+        map[n.replace(/^\.\//, "")] = url;
+        map[n.replace(/^\//, "")] = url;
+      } catch (e) { console.warn("[ApkMorph] blob map skip:", n, e); }
+    }
+    console.log("[ApkMorph] blobMap entries:", Object.keys(map).length);
+    return map;
+  }
+
+  function normalizeUrl(u) {
+    u = u.split("?")[0].split("#")[0];
+    if (u.startsWith("./")) u = u.slice(2);
+    if (u.startsWith("/")) u = u.slice(1);
+    return u;
+  }
+  function rewriteRefs(html, blobMap, baseDir) {
+    const lookup = (u) => {
+      const variants = [
+        u,
+        u.replace(/^\.\//, ""),
+        u.replace(/^\//, ""),
+        normalizeUrl(u),
+      ];
+      if (baseDir) variants.push((baseDir + "/" + normalizeUrl(u)).replace(/^\//, ""));
+      for (const v of variants) if (blobMap[v]) return blobMap[v];
+      return null;
+    };
+    let out = html.replace(/(src|href)\s*=\s*(["'])([^"']+)\2/gi, (m, attr, q, url) => {
+      if (/^(https?:|data:|#|mailto:|javascript:|blob:)/i.test(url)) return m;
+      const b = lookup(url);
+      return b ? `${attr}=${q}${b}${q}` : m;
+    });
+    out = out.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (m, q, url) => {
+      if (/^(https?:|data:|#|blob:)/i.test(url)) return m;
+      const b = lookup(url);
+      return b ? `url(${q}${b}${q})` : m;
+    });
+    return out;
+  }
+
+  /* ============================================================
+     Render: assets / APK info + image gallery
+     ============================================================ */
+  function renderAssetPreview({ file, images, meta }) {
+    const info = {
+      fileName: file.name,
+      size: file.size,
+      label: (meta && meta.label) || file.name.replace(/\.(apk|zip)$/i, ""),
+      package: (meta && meta.package) || "com.youssef.app",
+      versionName: (meta && meta.versionName) || "1.0.0",
+      versionCode: (meta && meta.versionCode) || "",
+      images,
+    };
     state.current = info;
+
     els.emptyState.hidden = true;
     els.openTab.hidden = true;
     els.webFrame.hidden = true;
+    els.webFrame.removeAttribute("srcdoc");
     els.webFrame.removeAttribute("src");
     els.preview.hidden = false;
     hideMenu();
     els.editPanel.hidden = true;
 
-    const icon = info.iconDataUrl || "";
+    const icon = images[0] ? images[0].url : "";
     const iconStyle = icon ? `background-image:url('${icon}')` : "";
     const code = info.versionCode ? ` (${escapeHtml(String(info.versionCode))})` : "";
+    const gallery = images.length
+      ? '<div class="gallery">' +
+          images.map((im) => `<div class="g-item"><img src="${im.url}" alt=""><div class="g-name">${escapeHtml(im.name)}</div></div>`).join("") +
+        "</div>"
+      : '<div class="g-empty">لا توجد صور قابلة للعرض داخل الأرشيف.</div>';
+
     els.preview.innerHTML = `
       <div class="app-meta">
         <div class="app-icon" style="${iconStyle}">${icon ? "" : "📦"}</div>
@@ -338,39 +445,46 @@
         <div class="app-pkg">${escapeHtml(info.package)}</div>
         <div class="app-row"><span>الإصدار</span><b>${escapeHtml(info.versionName)}${code}</b></div>
         <div class="app-row"><span>الحجم</span><b>${fmtSize(info.size)}</b></div>
-        <div class="app-row"><span>الملف</span><b>${escapeHtml(info.fileName)}</b></div>
-        <div class="app-row"><span>الموارد</span><b>${info.entries} عنصر</b></div>
+        <div class="app-row"><span>الملف</span><b>${escapeHtml(file.name)}</b></div>
+        <div class="app-row"><span>الأصول المستخرجة</span><b>${images.length} صورة</b></div>
         <button class="btn-launch" id="launchBtn">▶ فتح التطبيق</button>
-      </div>`;
-    els.preview.querySelector("#launchBtn").addEventListener("click", () => launchApp(info));
-    showStatus("تم استخراج بيانات التطبيق بنجاح");
+      </div>
+      ${gallery}`;
+    const lb = els.preview.querySelector("#launchBtn");
+    if (lb) lb.addEventListener("click", () => launchApp(info));
+    showStatus("تم استخراج " + images.length + " أصل من الأرشيف");
   }
 
   function launchApp(info) {
-    const icon = info.iconDataUrl || "";
+    console.log("[ApkMorph] launchApp:", info.label);
+    const icon = (info.images && info.images[0] && info.images[0].url) || info.iconDataUrl || "";
     els.splashIcon.src = icon;
     els.splashIcon.hidden = !icon;
-    els.splashName.textContent = info.label;
+    els.splashName.textContent = info.label || "";
     els.splash.hidden = false;
-    showStatus("جارٍ تشغيل " + info.label + " …");
+    showStatus("جارٍ التشغيل …");
     setTimeout(() => {
       els.splash.hidden = true;
       const iconStyle = icon ? `background-image:url('${icon}')` : "";
-      els.preview.innerHTML = `
-        <div class="run-screen">
-          <div class="run-icon" style="${iconStyle}">${icon ? "" : "📦"}</div>
-          <div class="run-name">${escapeHtml(info.label)}</div>
-          <div class="run-status">● يعمل الآن</div>
-          <button class="btn-ghost sm" id="backBtn">رجوع</button>
-        </div>`;
-      els.preview.querySelector("#backBtn").addEventListener("click", () => renderApkPreview(info));
-    }, 1300);
+      const rs = document.createElement("div");
+      rs.className = "run-screen";
+      rs.id = "runScreen";
+      rs.innerHTML = `
+        <div class="run-icon" style="${iconStyle}">${icon ? "" : "📦"}</div>
+        <div class="run-name">${escapeHtml(info.label || "")}</div>
+        <div class="run-status">● يعمل الآن</div>
+        <button class="btn-ghost sm" id="backBtn">رجوع</button>`;
+      els.preview.appendChild(rs);
+      rs.querySelector("#backBtn").addEventListener("click", () => rs.remove());
+      console.log("[ApkMorph] run screen shown");
+    }, 1200);
   }
 
   function loadUrl(url) {
     els.emptyState.hidden = true;
     els.preview.hidden = true;
     els.preview.innerHTML = "";
+    els.webFrame.removeAttribute("srcdoc");
     els.webFrame.onload = () => showStatus("تم التحميل — (بعض المواقع تمنع التضمين داخل إطار)");
     els.webFrame.onerror = () => toast("تعذّر تحميل الرابط", "error");
     els.webFrame.src = url;
@@ -388,30 +502,22 @@
     els.inspectOverlay.classList.toggle("on", on);
     if (!on) hideMenu();
   });
-
   els.inspectOverlay.addEventListener("click", (e) => {
     if (!els.inspectToggle.checked) return;
     const rect = els.screen.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
     els.inspectOverlay.style.pointerEvents = "none";
     const t = document.elementFromPoint(e.clientX, e.clientY);
     els.inspectOverlay.style.pointerEvents = "";
-
     let el = null;
     if (t && els.screen.contains(t) && t !== els.inspectOverlay &&
-        !els.optionsMenu.contains(t) && !els.editPanel.contains(t)) {
-      el = t;
-    }
+        !els.optionsMenu.contains(t) && !els.editPanel.contains(t)) el = t;
     if (!el) { hideMenu(); return; }
-
     state.selectedEl = el;
     const r = el.getBoundingClientRect();
     showInspectBox(r.left - rect.left, r.top - rect.top, r.width, r.height);
     showMenuAt(x + 8, y + 8);
   });
-
   function showInspectBox(l, t, w, h) {
     els.inspectBox.hidden = false;
     els.inspectBox.style.left = l + "px";
@@ -419,39 +525,26 @@
     els.inspectBox.style.width = w + "px";
     els.inspectBox.style.height = h + "px";
   }
-  function hideMenu() {
-    els.optionsMenu.hidden = true;
-    els.inspectBox.hidden = true;
-  }
+  function hideMenu() { els.optionsMenu.hidden = true; els.inspectBox.hidden = true; }
   function positionEl(el, x, y) {
     const sw = els.screen.clientWidth, sh = els.screen.clientHeight;
     const w = el.offsetWidth || 160, h = el.offsetHeight || 130;
     if (x + w > sw) x = sw - w - 6;
     if (y + h > sh) y = sh - h - 6;
-    if (x < 6) x = 6;
-    if (y < 6) y = 6;
-    el.style.left = x + "px";
-    el.style.top = y + "px";
+    if (x < 6) x = 6; if (y < 6) y = 6;
+    el.style.left = x + "px"; el.style.top = y + "px";
   }
-  function showMenuAt(x, y) {
-    els.optionsMenu.hidden = false;
-    positionEl(els.optionsMenu, x, y);
-  }
-
+  function showMenuAt(x, y) { els.optionsMenu.hidden = false; positionEl(els.optionsMenu, x, y); }
   els.optionsMenu.addEventListener("click", (e) => {
     const act = e.target.dataset.act;
     if (!act) return;
     if (act === "hide") {
-      if (state.selectedEl) {
-        state.selectedEl.style.visibility = "hidden";
-        toast("تم إخفاء العنصر", "info");
-      }
+      if (state.selectedEl) { state.selectedEl.style.visibility = "hidden"; toast("تم إخفاء العنصر", "info"); }
     } else if (act === "edit") {
       openEdit(state.selectedEl);
     }
     hideMenu();
   });
-
   function openEdit(el) {
     if (!el) return;
     state.editEl = el;
@@ -465,7 +558,6 @@
     els.editPanel.hidden = false;
     positionEl(els.editPanel, r.left - rect.left, r.bottom - rect.top + 6);
   }
-
   els.epApply.addEventListener("click", () => {
     const el = state.editEl;
     if (!el) return;
@@ -481,28 +573,22 @@
   els.epClose.addEventListener("click", () => { els.editPanel.hidden = true; });
 
   /* ============================================================
-     PWA File Handling — open .apk/.zip from the file manager
+     PWA File Handling
      ============================================================ */
   if ("launchQueue" in window && window.launchQueue && "setConsumer" in window.launchQueue) {
     window.launchQueue.setConsumer(async (params) => {
       try {
         const f = params.files && params.files[0];
-        if (f) {
-          const file = await f.getFile();
-          handleFile(file);
-          showStatus("تم فتح الملف من مدير الملفات");
-        }
-      } catch (_) {}
+        if (f) { const file = await f.getFile(); handleFile(file); showStatus("تم فتح الملف من مدير الملفات"); }
+      } catch (e) { console.error("[ApkMorph] launchQueue error", e); }
     });
   }
 
   /* ============================================================
-     Service worker (offline PWA)
+     Service worker
      ============================================================ */
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js").catch(() => {});
-    });
+    window.addEventListener("load", () => { navigator.serviceWorker.register("./sw.js").catch(() => {}); });
   }
 
   /* clock */
@@ -516,6 +602,6 @@
   tickClock();
   setInterval(tickClock, 10000);
 
-  /* boot */
-  showStatus("جاهز — اختر ملف APK للبدء");
+  showStatus("جاهز — اختر ملف APK أو ZIP للبدء");
+  console.log("[ApkMorph] ready");
 })();
