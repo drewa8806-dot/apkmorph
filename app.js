@@ -22,6 +22,7 @@
     emptyState: $("#emptyState"),
     preview: $("#preview"),
     webFrame: $("#webFrame"),
+    openTab: $("#openTab"),
     inspectToggle: $("#inspectToggle"),
     inspectOverlay: $("#inspectOverlay"),
     inspectBox: $("#inspectBox"),
@@ -82,6 +83,7 @@
   els.fileInput.addEventListener("change", (e) => {
     const f = e.target.files[0];
     if (f) handleFile(f);
+    e.target.value = ""; // allow re-selecting the same file
   });
 
   ["dragenter", "dragover"].forEach((ev) =>
@@ -108,9 +110,11 @@
 
   /* ---------------- handle a file ---------------- */
   async function handleFile(file) {
+    if (!file) return;
     const lower = file.name.toLowerCase();
     els.fileChip.hidden = false;
     els.fileChip.textContent = `📄 ${file.name} · ${fmtSize(file.size)}`;
+    els.openTab.hidden = true;
 
     if (!lower.endsWith(".apk") && !lower.endsWith(".zip")) {
       toast("الرجاء اختيار ملف APK أو ZIP", "error");
@@ -124,8 +128,8 @@
       toast("تم فتح " + file.name, "success");
     } catch (e) {
       console.error(e);
-      toast("تعذّر قراءة الملف: " + e.message, "error");
-      showStatus("فشل في قراءة الملف");
+      toast("تعذّر قراءة الملف: " + (e && e.message ? e.message : e), "error");
+      showStatus("فشل في قراءة الملف — جرّب ملف APK/ZIP آخر");
     }
   }
 
@@ -205,17 +209,25 @@
     let iconDataUrl = null;
     const iconEntry = pickIcon(entries);
     if (iconEntry) {
-      const raw = await readEntryData(buf, iconEntry);
-      const png = iconEntry.method === 8 ? await inflate(raw) : raw;
-      iconDataUrl = await blobToDataUrl(new Blob([png], { type: "image/png" }));
+      try {
+        const raw = await readEntryData(buf, iconEntry);
+        const png = iconEntry.method === 8 ? await inflate(raw) : raw;
+        iconDataUrl = await blobToDataUrl(new Blob([png], { type: "image/png" }));
+      } catch (_) {
+        iconDataUrl = null; // icon failed, continue without it
+      }
     }
 
     let meta = {};
     const man = entries.find((e) => e.name.toLowerCase() === "androidmanifest.xml");
     if (man) {
-      const raw = await readEntryData(buf, man);
-      const xml = man.method === 8 ? await inflate(raw) : raw;
-      try { meta = parseAxml(xml.buffer || xml); } catch (_) { meta = {}; }
+      try {
+        const raw = await readEntryData(buf, man);
+        const xml = man.method === 8 ? await inflate(raw) : raw;
+        meta = parseAxml(xml.buffer || xml);
+      } catch (_) {
+        meta = {};
+      }
     }
 
     const baseName = file.name.replace(/\.(apk|zip)$/i, "");
@@ -309,6 +321,7 @@
   function renderApkPreview(info) {
     state.current = info;
     els.emptyState.hidden = true;
+    els.openTab.hidden = true;
     els.webFrame.hidden = true;
     els.webFrame.removeAttribute("src");
     els.preview.hidden = false;
@@ -358,8 +371,12 @@
     els.emptyState.hidden = true;
     els.preview.hidden = true;
     els.preview.innerHTML = "";
+    els.webFrame.onload = () => showStatus("تم التحميل — (بعض المواقع تمنع التضمين داخل إطار)");
+    els.webFrame.onerror = () => toast("تعذّر تحميل الرابط", "error");
     els.webFrame.src = url;
     els.webFrame.hidden = false;
+    els.openTab.href = url;
+    els.openTab.hidden = false;
     showStatus("جارٍ تحميل " + url);
   }
 
@@ -378,7 +395,6 @@
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // temporarily disable overlay so elementFromPoint sees the element beneath
     els.inspectOverlay.style.pointerEvents = "none";
     const t = document.elementFromPoint(e.clientX, e.clientY);
     els.inspectOverlay.style.pointerEvents = "";

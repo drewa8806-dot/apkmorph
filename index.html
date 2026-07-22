@@ -78,10 +78,13 @@
     <section class="canvas-section panel">
       <div class="canvas-toolbar">
         <span class="canvas-title">الشاشة الحية</span>
-        <label class="inspect-toggle">
-          <input type="checkbox" id="inspectToggle" />
-          <span class="inspect-pill">🔍 تفتيش العناصر</span>
-        </label>
+        <div class="toolbar-actions">
+          <a id="openTab" class="open-tab" hidden target="_blank" rel="noopener">↗ فتح في تبويب</a>
+          <label class="inspect-toggle">
+            <input type="checkbox" id="inspectToggle" />
+            <span class="inspect-pill">🔍 تفتيش العناصر</span>
+          </label>
+        </div>
       </div>
 
       <div class="phone-stage">
