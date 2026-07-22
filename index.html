@@ -11,6 +11,12 @@
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" type="image/svg+xml" href="./icons/icon.svg" />
   <link rel="apple-touch-icon" href="./icons/icon-512.png" />
+  <!-- Critical inline fallback: guarantees the UI is never a blank black screen,
+       even if the external stylesheet fails to load on GitHub Pages -->
+  <style>
+    html, body { margin: 0; background: #09090b; color: #e4e4e7; }
+    .reveal { opacity: 1; }
+  </style>
   <link rel="stylesheet" href="./styles.css" />
   <title>ApkMorph — Smart Visual APK & Web Wrapper Customizer</title>
 </head>

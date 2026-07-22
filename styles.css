@@ -522,7 +522,9 @@ button.loading .btn-spinner { display: inline-block; }
 
 /* ============ ANIMATIONS ============ */
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.reveal { opacity: 0; animation: fadeUp 0.6s ease forwards; }
+/* Base state is visible; the animation only enhances the entrance.
+   This guarantees content shows even if animations are disabled (e.g. Reduce Motion). */
+.reveal { opacity: 1; animation: fadeUp 0.6s ease both; }
 .reveal:nth-child(1) { animation-delay: 0.05s; }
 .reveal:nth-child(2) { animation-delay: 0.12s; }
 .reveal:nth-child(3) { animation-delay: 0.19s; }
@@ -544,4 +546,5 @@ button.loading .btn-spinner { display: inline-block; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  .reveal { opacity: 1 !important; }
 }
