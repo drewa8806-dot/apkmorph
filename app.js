@@ -147,7 +147,7 @@
                 entries.find((en) => en.name === name.replace(/^\//, ""));
       if (!e) return null;
       return {
-        async (type) {
+        async async(type) {
           if (cache[e.name] && cache[e.name][type]) return cache[e.name][type];
           const raw = readEntryData(buf, e);
           const bytes = e.method === 8 ? await inflate(raw) : raw;
