@@ -1,7 +1,7 @@
 // ApkMorph Service Worker — Offline Cache Engine (v2)
 // Network-first so returning visitors always get the latest app,
 // with cache fallback for offline use.
-const CACHE = 'apkmorph-cache-v2';
+const CACHE = 'apkmorph-cache-v3';
 const ASSETS = [
   './',
   './index.html',

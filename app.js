@@ -1,9 +1,8 @@
 /* ============================================================
-   ApkMorph — App Logic (JSZip-powered archive reading)
-   - Pick APK/ZIP/web -> read with JSZip -> extract index.html / assets
-   - index.html  -> Blob URL -> rendered live inside the iframe
-   - no index.html (raw APK) -> Preview Dashboard of extracted components
-   - Inspect elements -> floating options menu (Hide / Edit / Cancel)
+   ApkMorph — App Logic (JSZip-powered, div-based preview — no iframe)
+   - Pick APK/ZIP/web -> read with JSZip -> extract assets
+   - index.html  -> rendered directly inside the preview DIV (Blob URLs for assets)
+   - raw APK (no HTML) -> Interactive Assets Dashboard (div), elements are inspectable
    - PWA file_handlers + launchQueue
    ============================================================ */
 (() => {
@@ -24,7 +23,6 @@
     screen: $("#screen"),
     emptyState: $("#emptyState"),
     preview: $("#preview"),
-    webFrame: $("#webFrame"),
     openTab: $("#openTab"),
     inspectToggle: $("#inspectToggle"),
     inspectOverlay: $("#inspectOverlay"),
@@ -36,10 +34,6 @@
     epSize: $("#epSize"),
     epApply: $("#epApply"),
     epClose: $("#epClose"),
-    splash: $("#splash"),
-    splashIcon: $("#splashIcon"),
-    splashName: $("#splashName"),
-    splashSub: $("#splashSub"),
     status: $("#status"),
     sbTime: $("#sbTime"),
     toasts: $("#toasts"),
@@ -48,7 +42,6 @@
   const state = { current: null, selectedEl: null, editEl: null };
 
   /* ---------------- helpers ---------------- */
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   function showStatus(msg) { if (els.status) els.status.textContent = msg; }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
@@ -57,14 +50,6 @@
     if (b > 1048576) return (b / 1048576).toFixed(2) + " MB";
     if (b > 1024) return (b / 1024).toFixed(1) + " KB";
     return b + " B";
-  }
-  function blobToDataUrl(blob) {
-    return new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(r.result);
-      r.onerror = rej;
-      r.readAsDataURL(blob);
-    });
   }
   function rgbToHex(c) {
     const m = c.match(/\d+/g);
@@ -93,7 +78,6 @@
     console.warn("[ApkMorph] JSZip not available — using built-in fallback parser");
     return await manualZip(buf);
   }
-
   function parseZip(buf) {
     const dv = new DataView(buf);
     let eocd = -1;
@@ -179,7 +163,7 @@
   async function extractImages(zip) {
     const names = getAllFiles(zip).filter((n) => /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(n));
     const out = [];
-    for (const n of names.slice(0, 30)) {
+    for (const n of names.slice(0, 40)) {
       try {
         const blob = await readFile(zip, n, "blob");
         if (blob && blob.size) out.push({ name: n, url: URL.createObjectURL(blob) });
@@ -292,7 +276,6 @@
     const f = e.dataTransfer.files[0];
     if (f) handleFile(f);
   });
-
   els.urlToggle.addEventListener("click", () => {
     els.urlRow.hidden = !els.urlRow.hidden;
     els.urlToggle.textContent = els.urlRow.hidden ? "أو أدخل رابط ويب ▾" : "إخفاء رابط الويب ▴";
@@ -323,13 +306,12 @@
       console.log("[ApkMorph] first .html:", htmlPath);
 
       if (htmlPath) {
-        await renderWebIframe(zip, htmlPath, file);
+        await renderWebPreview(zip, htmlPath, file);
         toast("تم عرض المشروع داخل المحاكي", "success");
         return;
       }
 
-      // No HTML => raw APK / asset-only archive => Preview Dashboard
-      console.log("[ApkMorph] No index.html — building Preview Dashboard");
+      console.log("[ApkMorph] No index.html — building Interactive Assets Dashboard");
       const images = await extractImages(zip);
       const texts = await extractTexts(zip);
       let meta = {};
@@ -351,29 +333,33 @@
   }
 
   /* ============================================================
-     Render: index.html -> Blob URL -> iframe (live)
+     Render: index.html -> preview DIV (no iframe)
      ============================================================ */
-  async function renderWebIframe(zip, htmlPath, file) {
-    console.log("[ApkMorph] renderWebIframe:", htmlPath);
+  async function renderWebPreview(zip, htmlPath, file) {
+    console.log("[ApkMorph] renderWebPreview (div):", htmlPath);
     const html = await readFile(zip, htmlPath, "string");
     const baseDir = htmlPath.includes("/") ? htmlPath.replace(/\/[^/]*$/, "") : "";
     const blobMap = await buildBlobMap(zip);
     const rewritten = rewriteRefs(html, blobMap, baseDir);
 
-    const blob = new Blob([rewritten], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    console.log("[ApkMorph] index.html -> Blob URL:", url.slice(0, 40) + "…");
+    // Build a div-safe version: keep <style>, drop <script>, unwrap html/body
+    const tmp = document.createElement("div");
+    tmp.innerHTML = rewritten;
+    let styles = "";
+    tmp.querySelectorAll("style").forEach((s) => { styles += s.textContent + "\n"; });
+    const body = tmp.querySelector("body") || tmp;
+    const wrap = document.createElement("div");
+    wrap.innerHTML = body.innerHTML;
+    wrap.querySelectorAll("script").forEach((s) => s.remove());
 
     els.emptyState.hidden = true;
-    els.preview.hidden = true;
-    els.preview.innerHTML = "";
-    els.webFrame.removeAttribute("srcdoc");
-    els.webFrame.removeAttribute("src");
-    els.webFrame.src = url;
-    els.webFrame.hidden = false;
-    els.openTab.href = url;
-    els.openTab.hidden = false;
+    els.openTab.hidden = true;
+    els.preview.hidden = false;
+    els.preview.innerHTML = (styles ? `<style>${styles}</style>` : "") + wrap.innerHTML;
+    hideMenu();
+    els.editPanel.hidden = true;
     showStatus("تم عرض " + file.name + " داخل المحاكي");
+    console.log("[ApkMorph] web project rendered into preview DIV");
   }
 
   async function buildBlobMap(zip) {
@@ -419,7 +405,7 @@
   }
 
   /* ============================================================
-     Render: Preview Dashboard (no index.html -> APK / assets)
+     Render: Interactive Assets Dashboard (raw APK / no HTML)
      ============================================================ */
   function renderDashboard({ file, images, texts, meta }) {
     const info = {
@@ -434,9 +420,6 @@
 
     els.emptyState.hidden = true;
     els.openTab.hidden = true;
-    els.webFrame.hidden = true;
-    els.webFrame.removeAttribute("srcdoc");
-    els.webFrame.removeAttribute("src");
     els.preview.hidden = false;
     hideMenu();
     els.editPanel.hidden = true;
@@ -444,11 +427,15 @@
     const icon = images[0] ? images[0].url : "";
     const iconStyle = icon ? `background-image:url('${icon}')` : "";
     const code = info.versionCode ? ` (${escapeHtml(String(info.versionCode))})` : "";
-    const gallery = images.length
-      ? '<div class="gallery">' +
-          images.map((im) => `<div class="g-item"><img src="${im.url}" alt=""><div class="g-name">${escapeHtml(im.name)}</div></div>`).join("") +
-        "</div>"
+
+    const cards = images.length
+      ? images.map((im, i) => `
+          <div class="app-card" data-asset="${i}">
+            <img src="${im.url}" alt="">
+            <div class="app-card-name">${escapeHtml(im.name.split("/").pop())}</div>
+          </div>`).join("")
       : '<div class="g-empty">لا توجد صور قابلة للعرض داخل الأرشيف.</div>';
+
     const textBlock = texts.length
       ? '<div class="dash-texts"><h4>نصوص مستخرجة</h4>' +
           texts.map((t) => `<div class="t-item"><div class="t-name">${escapeHtml(t.name)}</div><div class="t-body">${escapeHtml(t.text)}</div></div>`).join("") +
@@ -456,37 +443,46 @@
       : "";
 
     els.preview.innerHTML = `
-      <div class="app-meta">
-        <div class="app-icon" style="${iconStyle}">${icon ? "" : "📦"}</div>
-        <div class="app-name">${escapeHtml(info.label)}</div>
-        <div class="app-pkg">${escapeHtml(info.package)}</div>
-        <div class="app-row"><span>الإصدار</span><b>${escapeHtml(info.versionName)}${code}</b></div>
-        <div class="app-row"><span>الحجم</span><b>${fmtSize(info.size)}</b></div>
-        <div class="app-row"><span>الملف</span><b>${escapeHtml(file.name)}</b></div>
-        <div class="app-row"><span>الأصول</span><b>${images.length} صورة</b></div>
-      </div>
-      ${gallery}
-      ${textBlock}`;
-    showStatus("تم استخراج " + images.length + " أصل — معاينة لوحة التحكم");
-    console.log("[ApkMorph] dashboard rendered");
+      <div class="app-ui">
+        <div class="app-ui-header">
+          <div class="app-icon" style="${iconStyle}">${icon ? "" : "📦"}</div>
+          <div>
+            <div class="app-name">${escapeHtml(info.label)}</div>
+            <div class="app-pkg">${escapeHtml(info.package)}</div>
+          </div>
+        </div>
+        <div class="app-ui-meta">
+          <span>الإصدار ${escapeHtml(info.versionName)}${code}</span>
+          <span>${fmtSize(info.size)}</span>
+          <span>${images.length} أصل</span>
+        </div>
+        <div class="app-ui-body">
+          <h4 class="app-ui-title">عناصر التطبيق المفكوكة (اضغط للتفتيش)</h4>
+          <div class="app-cards">${cards}</div>
+        </div>
+        <div class="app-ui-bar">
+          <button class="app-ui-btn">الرئيسية</button>
+          <button class="app-ui-btn">البحث</button>
+          <button class="app-ui-btn">الإعدادات</button>
+        </div>
+        ${textBlock}
+      </div>`;
+    showStatus("تم استخراج " + images.length + " أصل — لوحة تحكم تفاعلية");
+    console.log("[ApkMorph] interactive dashboard rendered");
   }
 
   function loadUrl(url) {
     els.emptyState.hidden = true;
     els.preview.hidden = true;
     els.preview.innerHTML = "";
-    els.webFrame.removeAttribute("srcdoc");
-    els.webFrame.onload = () => showStatus("تم التحميل — (بعض المواقع تمنع التضمين داخل إطار)");
-    els.webFrame.onerror = () => toast("تعذّر تحميل الرابط", "error");
-    els.webFrame.src = url;
-    els.webFrame.hidden = false;
     els.openTab.href = url;
     els.openTab.hidden = false;
-    showStatus("جارٍ تحميل " + url);
+    showStatus("افتح الرابط في تبويب جديد (لا يمكن تضمينه داخل إطار في هذه البيئة): " + url);
+    toast("افتح الرابط عبر الزر «فتح في تبويب»", "info");
   }
 
   /* ============================================================
-     Inspect -> floating options menu
+     Inspect -> floating options menu (works on the preview DIV)
      ============================================================ */
   els.inspectToggle.addEventListener("change", () => {
     els.inspectOverlay.classList.toggle("on", els.inspectToggle.checked);
