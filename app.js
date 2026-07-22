@@ -1,9 +1,10 @@
 /* ============================================================
    ApkMorph — App Logic (JSZip-powered archive reading)
-   - Pick APK/ZIP/web -> read with JSZip -> extract index.html / assets as Blobs
-   - Web projects render live inside the iframe; others show extracted assets
+   - Pick APK/ZIP/web -> read with JSZip -> extract index.html / assets
+   - index.html  -> Blob URL -> rendered live inside the iframe
+   - no index.html (raw APK) -> Preview Dashboard of extracted components
    - Inspect elements -> floating options menu (Hide / Edit / Cancel)
-   - PWA file_handlers + launchQueue (open .apk/.zip from file manager)
+   - PWA file_handlers + launchQueue
    ============================================================ */
 (() => {
   "use strict";
@@ -93,7 +94,6 @@
     return await manualZip(buf);
   }
 
-  // ---- Built-in fallback (used only if the CDN failed to load) ----
   function parseZip(buf) {
     const dv = new DataView(buf);
     let eocd = -1;
@@ -161,7 +161,6 @@
     return api;
   }
 
-  // ---- zip object helpers (work for JSZip and the fallback) ----
   function getAllFiles(zip) {
     if (zip.files) return Object.keys(zip.files).filter((n) => !zip.files[n].dir);
     return [];
@@ -171,11 +170,11 @@
     if (!f) return null;
     return f.async(type);
   }
-  function findIndexHtml(zip) {
+  function findFirstHtml(zip) {
     const names = getAllFiles(zip);
-    let root = names.find((n) => /^index\.html?$/i.test(n));
+    const root = names.find((n) => /^index\.html?$/i.test(n));
     if (root) return root;
-    return names.find((n) => /(^|\/)index\.html?$/i.test(n)) || null;
+    return names.find((n) => /\.html?$/i.test(n)) || null;
   }
   async function extractImages(zip) {
     const names = getAllFiles(zip).filter((n) => /\.(png|jpe?g|webp|gif|svg|bmp)$/i.test(n));
@@ -187,6 +186,18 @@
       } catch (e) { console.warn("[ApkMorph] image extract failed:", n, e); }
     }
     console.log("[ApkMorph] extracted", out.length, "images");
+    return out;
+  }
+  async function extractTexts(zip) {
+    const names = getAllFiles(zip).filter((n) => /\.(txt|json|xml|csv|md|ini|prop|cfg)$/i.test(n));
+    const out = [];
+    for (const n of names.slice(0, 12)) {
+      try {
+        const txt = await readFile(zip, n, "string");
+        if (txt && txt.length < 4000) out.push({ name: n, text: txt.slice(0, 220) });
+      } catch (e) { console.warn("[ApkMorph] text extract failed:", n, e); }
+    }
+    console.log("[ApkMorph] extracted", out.length, "text snippets");
     return out;
   }
 
@@ -308,15 +319,19 @@
     showStatus("جارٍ قراءة الأرشيف …");
     try {
       const zip = await loadZip(file);
-      const idx = findIndexHtml(zip);
-      if (idx) {
-        console.log("[ApkMorph] Web project detected at", idx);
-        await renderWebProject(zip, idx, file);
+      const htmlPath = findFirstHtml(zip);
+      console.log("[ApkMorph] first .html:", htmlPath);
+
+      if (htmlPath) {
+        await renderWebIframe(zip, htmlPath, file);
         toast("تم عرض المشروع داخل المحاكي", "success");
         return;
       }
-      console.log("[ApkMorph] No index.html — extracting assets / APK info");
+
+      // No HTML => raw APK / asset-only archive => Preview Dashboard
+      console.log("[ApkMorph] No index.html — building Preview Dashboard");
       const images = await extractImages(zip);
+      const texts = await extractTexts(zip);
       let meta = {};
       const manName = getAllFiles(zip).find((n) => /androidmanifest\.xml$/i.test(n));
       if (manName) {
@@ -326,7 +341,7 @@
           console.log("[ApkMorph] manifest:", meta);
         } catch (e) { console.warn("[ApkMorph] manifest parse failed", e); }
       }
-      renderAssetPreview({ file, images, meta });
+      renderDashboard({ file, images, texts, meta });
       toast("تم استخراج الأصول من " + file.name, "success");
     } catch (e) {
       console.error("[ApkMorph] handleFile error:", e);
@@ -336,25 +351,29 @@
   }
 
   /* ============================================================
-     Render: web project (index.html) inside iframe
+     Render: index.html -> Blob URL -> iframe (live)
      ============================================================ */
-  async function renderWebProject(zip, idxPath, file) {
-    console.log("[ApkMorph] renderWebProject:", idxPath);
-    const html = await readFile(zip, idxPath, "string");
-    const baseDir = idxPath.includes("/") ? idxPath.replace(/\/[^/]*$/, "") : "";
+  async function renderWebIframe(zip, htmlPath, file) {
+    console.log("[ApkMorph] renderWebIframe:", htmlPath);
+    const html = await readFile(zip, htmlPath, "string");
+    const baseDir = htmlPath.includes("/") ? htmlPath.replace(/\/[^/]*$/, "") : "";
     const blobMap = await buildBlobMap(zip);
     const rewritten = rewriteRefs(html, blobMap, baseDir);
 
+    const blob = new Blob([rewritten], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    console.log("[ApkMorph] index.html -> Blob URL:", url.slice(0, 40) + "…");
+
     els.emptyState.hidden = true;
-    els.openTab.hidden = true;
     els.preview.hidden = true;
     els.preview.innerHTML = "";
     els.webFrame.removeAttribute("srcdoc");
     els.webFrame.removeAttribute("src");
-    els.webFrame.srcdoc = rewritten;
+    els.webFrame.src = url;
     els.webFrame.hidden = false;
+    els.openTab.href = url;
+    els.openTab.hidden = false;
     showStatus("تم عرض " + file.name + " داخل المحاكي");
-    console.log("[ApkMorph] iframe populated via srcdoc");
   }
 
   async function buildBlobMap(zip) {
@@ -373,7 +392,6 @@
     console.log("[ApkMorph] blobMap entries:", Object.keys(map).length);
     return map;
   }
-
   function normalizeUrl(u) {
     u = u.split("?")[0].split("#")[0];
     if (u.startsWith("./")) u = u.slice(2);
@@ -382,12 +400,7 @@
   }
   function rewriteRefs(html, blobMap, baseDir) {
     const lookup = (u) => {
-      const variants = [
-        u,
-        u.replace(/^\.\//, ""),
-        u.replace(/^\//, ""),
-        normalizeUrl(u),
-      ];
+      const variants = [u, u.replace(/^\.\//, ""), u.replace(/^\//, ""), normalizeUrl(u)];
       if (baseDir) variants.push((baseDir + "/" + normalizeUrl(u)).replace(/^\//, ""));
       for (const v of variants) if (blobMap[v]) return blobMap[v];
       return null;
@@ -406,9 +419,9 @@
   }
 
   /* ============================================================
-     Render: assets / APK info + image gallery
+     Render: Preview Dashboard (no index.html -> APK / assets)
      ============================================================ */
-  function renderAssetPreview({ file, images, meta }) {
+  function renderDashboard({ file, images, texts, meta }) {
     const info = {
       fileName: file.name,
       size: file.size,
@@ -416,9 +429,8 @@
       package: (meta && meta.package) || "com.youssef.app",
       versionName: (meta && meta.versionName) || "1.0.0",
       versionCode: (meta && meta.versionCode) || "",
-      images,
     };
-    state.current = info;
+    state.current = { info, images };
 
     els.emptyState.hidden = true;
     els.openTab.hidden = true;
@@ -437,6 +449,11 @@
           images.map((im) => `<div class="g-item"><img src="${im.url}" alt=""><div class="g-name">${escapeHtml(im.name)}</div></div>`).join("") +
         "</div>"
       : '<div class="g-empty">لا توجد صور قابلة للعرض داخل الأرشيف.</div>';
+    const textBlock = texts.length
+      ? '<div class="dash-texts"><h4>نصوص مستخرجة</h4>' +
+          texts.map((t) => `<div class="t-item"><div class="t-name">${escapeHtml(t.name)}</div><div class="t-body">${escapeHtml(t.text)}</div></div>`).join("") +
+        "</div>"
+      : "";
 
     els.preview.innerHTML = `
       <div class="app-meta">
@@ -446,38 +463,12 @@
         <div class="app-row"><span>الإصدار</span><b>${escapeHtml(info.versionName)}${code}</b></div>
         <div class="app-row"><span>الحجم</span><b>${fmtSize(info.size)}</b></div>
         <div class="app-row"><span>الملف</span><b>${escapeHtml(file.name)}</b></div>
-        <div class="app-row"><span>الأصول المستخرجة</span><b>${images.length} صورة</b></div>
-        <button class="btn-launch" id="launchBtn">▶ فتح التطبيق</button>
+        <div class="app-row"><span>الأصول</span><b>${images.length} صورة</b></div>
       </div>
-      ${gallery}`;
-    const lb = els.preview.querySelector("#launchBtn");
-    if (lb) lb.addEventListener("click", () => launchApp(info));
-    showStatus("تم استخراج " + images.length + " أصل من الأرشيف");
-  }
-
-  function launchApp(info) {
-    console.log("[ApkMorph] launchApp:", info.label);
-    const icon = (info.images && info.images[0] && info.images[0].url) || info.iconDataUrl || "";
-    els.splashIcon.src = icon;
-    els.splashIcon.hidden = !icon;
-    els.splashName.textContent = info.label || "";
-    els.splash.hidden = false;
-    showStatus("جارٍ التشغيل …");
-    setTimeout(() => {
-      els.splash.hidden = true;
-      const iconStyle = icon ? `background-image:url('${icon}')` : "";
-      const rs = document.createElement("div");
-      rs.className = "run-screen";
-      rs.id = "runScreen";
-      rs.innerHTML = `
-        <div class="run-icon" style="${iconStyle}">${icon ? "" : "📦"}</div>
-        <div class="run-name">${escapeHtml(info.label || "")}</div>
-        <div class="run-status">● يعمل الآن</div>
-        <button class="btn-ghost sm" id="backBtn">رجوع</button>`;
-      els.preview.appendChild(rs);
-      rs.querySelector("#backBtn").addEventListener("click", () => rs.remove());
-      console.log("[ApkMorph] run screen shown");
-    }, 1200);
+      ${gallery}
+      ${textBlock}`;
+    showStatus("تم استخراج " + images.length + " أصل — معاينة لوحة التحكم");
+    console.log("[ApkMorph] dashboard rendered");
   }
 
   function loadUrl(url) {
@@ -498,9 +489,8 @@
      Inspect -> floating options menu
      ============================================================ */
   els.inspectToggle.addEventListener("change", () => {
-    const on = els.inspectToggle.checked;
-    els.inspectOverlay.classList.toggle("on", on);
-    if (!on) hideMenu();
+    els.inspectOverlay.classList.toggle("on", els.inspectToggle.checked);
+    if (!els.inspectToggle.checked) hideMenu();
   });
   els.inspectOverlay.addEventListener("click", (e) => {
     if (!els.inspectToggle.checked) return;
@@ -591,7 +581,6 @@
     window.addEventListener("load", () => { navigator.serviceWorker.register("./sw.js").catch(() => {}); });
   }
 
-  /* clock */
   function tickClock() {
     const d = new Date();
     let h = d.getHours();
